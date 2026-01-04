@@ -219,6 +219,8 @@ void process_csv_file(const char *path, bool should_print) {
 
   std::string line;
   while (std::getline(file, line)) {
+    if (!line.empty() && line.back() == '\r')
+      line.pop_back();
     Order o{};
     if (!parseLine(line, o))
       continue;
