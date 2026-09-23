@@ -13,11 +13,13 @@
 static Order order(const char *s) { Order o; CHECK(parseLine(s, o)); return o; }
 static void collect(void *p, const Trade &t) { static_cast<std::vector<Trade> *>(p)->push_back(t); }
 static void put(std::vector<std::uint8_t> &p, std::size_t offset, std::size_t n, std::uint64_t v) {
+  CHECK(offset <= p.size() && n <= p.size() - offset);
   while (n) { p[offset + --n] = static_cast<std::uint8_t>(v); v >>= 8; }
 }
 static std::vector<std::uint8_t> packet(char type, std::size_t size) {
   std::vector<std::uint8_t> p(size); p[0] = type;
-  put(p, 1, 2, 7); put(p, 5, 6, 0x010203040506ULL); put(p, 11, 8, 0x0102030405060708ULL);
+  put(p, 1, 2, 7); put(p, 5, 6, 0x010203040506ULL);
+  if(size>=19) put(p, 11, 8, 0x0102030405060708ULL);
   return p;
 }
 static void test_book() {

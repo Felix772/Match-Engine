@@ -15,6 +15,7 @@ jobs:
   sanitizers:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         sanitizer: ["address,undefined", thread]
     steps:
