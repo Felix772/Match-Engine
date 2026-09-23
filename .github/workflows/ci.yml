@@ -1,0 +1,24 @@
+name: C++ validation
+on: [push, pull_request]
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libbenchmark-dev
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DWITH_GOOGLE_BENCHMARK=ON
+      - run: cmake --build build -j2
+      - run: ctest --test-dir build --output-on-failure
+      - run: python3 tests/reference.py build/match-engine
+      - run: ./build/stress-benchmark data.csv
+      - run: ./build/benchmark-orderbook --benchmark_min_time=0.1s
+  sanitizers:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        sanitizer: ["address,undefined", thread]
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=${{ matrix.sanitizer }} -fno-omit-frame-pointer"
+      - run: cmake --build build -j2 --target engine-tests
+      - run: ctest --test-dir build --output-on-failure

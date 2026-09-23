@@ -1,229 +1,152 @@
-// orderbook.cpp
+#include "orderbook.h"
 #include <algorithm>
+#include <charconv>
 #include <fstream>
 #include <iostream>
 #include <list>
 #include <map>
-#include <ranges>
+#include <memory_resource>
 #include <stdexcept>
-#include <string>
 #include <unordered_map>
-
-struct Order {
-  char type; // 'A' or 'C'
-  int ts;    // timestamp
-  int order_id;
-  char side; // 'B' or 'S'
-  int price;
-  unsigned qty;
-  std::string trader;
-};
-
-// location container
-struct location {
-  char side;
-  int price;
-  std::list<Order>::iterator it;
-};
-
-std::map<int, std::list<Order>> bids, asks;   // price -> list of orders map
-std::unordered_map<int, location> orderIndex; // id -> location map
-
-// ---- printing control (for benchmarking) ----
-static bool g_should_print = true;
-
-static inline void maybe_print_trade(int ts, int price, unsigned qty, int id1,
-                                     int id2, const std::string &trader1,
-                                     const std::string &trader2) {
-  if (!g_should_print)
-    return;
-  std::cout << "T," << ts << "," << price << "," << qty << "," << id1 << ","
-            << id2 << "," << trader1 << "," << trader2 << "\n";
-}
-
-// ---- helpers ----
-static std::string to_string_field(auto &&field) {
-  return {field.begin(), field.end()};
-}
-
-// ---- orderbook ops ----
-void resetBook() {
-  bids.clear();
-  asks.clear();
-  orderIndex.clear();
-}
-
-static void addOrder(Order &&o) { // add order after matching
-  std::map<int, std::list<Order>> &book = (o.side == 'B') ? bids : asks;
-
-  auto &level = book[o.price];
-  level.push_back(std::move(o));
-
-  auto it = std::prev(level.end());
-  orderIndex[it->order_id] = location{it->side, it->price, it};
-}
-
-bool parseLine(const std::string &line, Order &o) {
-  if (line.empty())
-    return false;
-
-  auto p = line | std::views::split(',');
-  auto it = p.begin();
-  if (it == p.end())
-    return false;
-
-  char type = *(*it).begin(); // first char of first field
-
-  if (type == 'C') {
-    o.type = 'C';
-    ++it; // ts
-    if (it == p.end())
-      return false;
-    o.ts = std::stoi(to_string_field(*it++));
-    if (it == p.end())
-      return false;
-    o.order_id = std::stoi(to_string_field(*it));
-    return true;
+#include <vector>
+struct OrderBook::Impl {
+  std::vector<std::byte> storage;
+  std::pmr::monotonic_buffer_resource arena;
+  std::pmr::unsynchronized_pool_resource pool;
+  using Level = std::pmr::list<Order>;
+  using Side = std::pmr::map<std::uint32_t, Level>;
+  Side bids, asks;
+  struct Location { Side *side; Side::iterator level; Level::iterator order; };
+  std::pmr::unordered_map<std::uint64_t, Location> index;
+  explicit Impl(std::size_t bytes)
+      : storage(bytes), arena(storage.data(), storage.size(), std::pmr::null_memory_resource()),
+        pool(&arena), bids(&pool), asks(&pool), index(&pool) { index.reserve(65536); }
+  void add(Order o) {
+    auto &side = o.side == 'B' ? bids : asks;
+    auto [level, created] = side.try_emplace(o.price);
+    try {
+      level->second.push_back(std::move(o));
+      auto it = std::prev(level->second.end());
+      try { index.emplace(it->order_id, Location{&side, level, it}); }
+      catch (...) { level->second.pop_back(); throw; }
+    } catch (...) {
+      if (created && level->second.empty()) side.erase(level);
+      throw;
+    }
   }
-
-  // Add order: A,ts,id,side,price,qty,trader
-  o.type = 'A';
-  ++it; // ts
-  if (it == p.end())
-    return false;
-  o.ts = std::stoi(to_string_field(*it++));
-  if (it == p.end())
-    return false;
-  o.order_id = std::stoi(to_string_field(*it++));
-  if (it == p.end())
-    return false;
-  o.side = *(*it++).begin();
-  if (it == p.end())
-    return false;
-  o.price = std::stoi(to_string_field(*it++));
-  if (it == p.end())
-    return false;
-  o.qty = static_cast<unsigned>(std::stoul(to_string_field(*it++)));
-  if (it == p.end())
-    return false;
-  o.trader = to_string_field(*it);
-
+};
+OrderBook::OrderBook(std::size_t bytes) : impl_(std::make_unique<Impl>(bytes)) {}
+OrderBook::~OrderBook() = default;
+std::size_t OrderBook::size() const { return impl_->index.size(); }
+const Order *OrderBook::find(std::uint64_t id) const {
+  auto it = impl_->index.find(id);
+  return it == impl_->index.end() ? nullptr : &*it->second.order;
+}
+void OrderBook::clear() { impl_->index.clear(); impl_->bids.clear(); impl_->asks.clear(); }
+bool OrderBook::cancel(std::uint64_t id) {
+  auto &p = *impl_;
+  auto it = p.index.find(id);
+  if (it == p.index.end()) return false;
+  auto loc = it->second;
+  loc.level->second.erase(loc.order);
+  if (loc.level->second.empty()) loc.side->erase(loc.level);
+  p.index.erase(it);
   return true;
 }
-
-static bool cancelOrder(int order_id) {
-  auto idx = orderIndex.find(order_id);
-  if (idx == orderIndex.end())
-    return false;
-
-  const location &loc = idx->second;
-  std::map<int, std::list<Order>> &book = (loc.side == 'B') ? bids : asks;
-
-  auto levelIt = book.find(loc.price);
-  if (levelIt == book.end()) {
-    // order already matched/removed
-    orderIndex.erase(idx);
-    return false;
-  }
-
-  levelIt->second.erase(loc.it);
-  if (levelIt->second.empty()) {
-    book.erase(levelIt);
-  }
-  orderIndex.erase(idx);
+bool OrderBook::reduce(std::uint64_t id, std::uint32_t qty) {
+  auto it = impl_->index.find(id);
+  if (it == impl_->index.end()) return false;
+  auto &o = *it->second.order;
+  if (!qty || qty > o.qty) throw std::invalid_argument("invalid reduction quantity");
+  if (qty == o.qty) return cancel(id);
+  o.qty -= qty;
   return true;
 }
-
-static void processBuy(Order incoming) {
-  while (incoming.qty > 0 && !asks.empty()) {
-    auto askIt = asks.begin(); // best ask
-    int askPrice = askIt->first;
-
-    if (askPrice > incoming.price)
-      break;
-
-    std::list<Order> &level = askIt->second;
-    Order &topSell = level.front();
-
-    unsigned traded = std::min(incoming.qty, topSell.qty);
-    incoming.qty -= traded;
-    topSell.qty -= traded;
-
-    maybe_print_trade(incoming.ts, askPrice, traded, incoming.order_id,
-                      topSell.order_id, incoming.trader, topSell.trader);
-
-    if (topSell.qty == 0) {
-      orderIndex.erase(topSell.order_id);
-      level.pop_front();
-    }
-    if (level.empty()) {
-      asks.erase(askIt);
-    }
-  }
-
-  if (incoming.qty > 0)
-    addOrder(std::move(incoming));
+static void validate(const Order &o) {
+  if (o.type != 'A' || (o.side != 'B' && o.side != 'S') || !o.qty || o.trader.back() != '\0')
+    throw std::invalid_argument("invalid add order");
 }
-
-static void processSell(Order incoming) {
-  while (incoming.qty > 0 && !bids.empty()) {
-    auto bidIt = std::prev(bids.end()); // best bid
-    int bidPrice = bidIt->first;
-
-    if (incoming.price > bidPrice)
-      break;
-
-    std::list<Order> &level = bidIt->second;
-    Order &topBuy = level.front();
-
-    unsigned traded = std::min(incoming.qty, topBuy.qty);
-    incoming.qty -= traded;
-    topBuy.qty -= traded;
-
-    maybe_print_trade(incoming.ts, bidPrice, traded, topBuy.order_id,
-                      incoming.order_id, topBuy.trader, incoming.trader);
-
-    if (topBuy.qty == 0) {
-      orderIndex.erase(topBuy.order_id);
-      level.pop_front();
-    }
-    if (level.empty()) {
-      bids.erase(bidIt);
-    }
-  }
-
-  if (incoming.qty > 0)
-    addOrder(std::move(incoming));
+void OrderBook::add_depth(Order o) {
+  validate(o);
+  if (find(o.order_id)) throw std::invalid_argument("duplicate live order ID");
+  impl_->add(std::move(o));
 }
-
-void processOrder(Order o) {
-  if (o.type == 'A') {
-    if (o.side == 'B')
-      processBuy(std::move(o));
-    else
-      processSell(std::move(o));
-  } else if (o.type == 'C') {
-    cancelOrder(o.order_id);
-  }
+bool OrderBook::replace(std::uint64_t old_id, std::uint64_t new_id, std::uint32_t price, std::uint32_t qty) {
+  auto old = find(old_id);
+  if (!old) return false;
+  if (!qty || find(new_id)) throw std::invalid_argument("invalid replacement");
+  Order next = *old;
+  next.order_id = new_id; next.price = price; next.qty = qty;
+  add_depth(next);
+  cancel(old_id);
+  return true;
 }
-
-// Bencher-style “macro” function: callable from main and benchmark
+void OrderBook::process(Order o, TradeSink sink, void *context) {
+  if (o.type == 'C') { cancel(o.order_id); return; }
+  validate(o);
+  if (find(o.order_id)) throw std::invalid_argument("duplicate live order ID");
+  auto &opposite = o.side == 'B' ? impl_->asks : impl_->bids;
+  while (o.qty && !opposite.empty()) {
+    auto level = o.side == 'B' ? opposite.begin() : std::prev(opposite.end());
+    if (o.side == 'B' ? level->first > o.price : level->first < o.price) break;
+    auto &resting = level->second.front();
+    const auto qty = std::min(o.qty, resting.qty);
+    const auto &buy = o.side == 'B' ? o : resting;
+    const auto &sell = o.side == 'S' ? o : resting;
+    Trade trade{o.ts, buy.order_id, sell.order_id, level->first, qty, buy.trader, sell.trader};
+    o.qty -= qty; resting.qty -= qty;
+    if (!resting.qty) cancel(resting.order_id);
+    if (sink) sink(context, trade);
+  }
+  if (o.qty) impl_->add(std::move(o));
+}
+template<class T> static bool number(std::string_view s, T &value) {
+  if (s.empty()) return false;
+  const auto [end, ec] = std::from_chars(s.data(), s.data() + s.size(), value);
+  return ec == std::errc{} && end == s.data() + s.size();
+}
+bool parseLine(std::string_view line, Order &result) {
+  if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+  std::array<std::string_view, 7> fields{};
+  std::size_t n = 0;
+  for (;;) {
+    if (n == fields.size()) return false;
+    auto comma = line.find(','); fields[n++] = line.substr(0, comma);
+    if (comma == line.npos) break;
+    line.remove_prefix(comma + 1);
+  }
+  Order o{};
+  if (n < 3 || !number(fields[1], o.ts) || !number(fields[2], o.order_id)) return false;
+  if (fields[0] == "C" && n == 3) o.type = 'C';
+  else if (fields[0] == "A" && n == 7) {
+    o.type = 'A';
+    if (fields[3] != "B" && fields[3] != "S") return false;
+    o.side = fields[3][0];
+    if (!number(fields[4], o.price) || !number(fields[5], o.qty) || !o.qty ||
+        fields[6].empty() || fields[6].size() >= o.trader.size() || fields[6].find('\0') != fields[6].npos) return false;
+    std::copy(fields[6].begin(), fields[6].end(), o.trader.begin());
+  } else return false;
+  result = o;
+  return true;
+}
+void print_trade(void *, const Trade &t) {
+  std::cout << "T," << t.ts << ',' << t.price << ',' << t.qty << ',' << t.buy_id
+            << ',' << t.sell_id << ',' << t.buyer.data() << ',' << t.seller.data() << '\n';
+}
+static OrderBook &local_book() { thread_local OrderBook book; return book; }
+void resetBook() { local_book().clear(); }
+void processOrder(Order o) { local_book().process(std::move(o), print_trade); }
 void process_csv_file(const char *path, bool should_print) {
-  resetBook(); // important for benchmarking + repeatability
-  g_should_print = should_print;
-
+  resetBook();
   std::ifstream file(path);
-  if (!file) {
-    throw std::runtime_error("Could not open input file");
-  }
-
-  std::string line;
+  if (!file) throw std::runtime_error("Could not open input file");
+  std::string line; std::size_t row = 0;
   while (std::getline(file, line)) {
-    if (!line.empty() && line.back() == '\r')
-      line.pop_back();
+    ++row;
+    if (line.empty() || line == "\r") continue;
     Order o{};
-    if (!parseLine(line, o))
-      continue;
-    processOrder(std::move(o));
+    if (!parseLine(line, o)) throw std::runtime_error("Invalid CSV row " + std::to_string(row));
+    local_book().process(std::move(o), should_print ? print_trade : nullptr);
   }
+  if (file.bad()) throw std::runtime_error("Input read failed");
 }
