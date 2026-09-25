@@ -30,6 +30,40 @@ Global `new`/`new[]`, including aligned forms, are counted on the benchmark thre
 during the measured loops. This does not count arbitrary C allocations or other
 threads. The production pool independently prohibits heap fallback.
 
+## Local WSL2 verification (2026-09-25)
+
+Five independent runs on this machine's Ubuntu WSL2, Linux
+`6.18.33.2-microsoft-standard-WSL2`, Intel Core Ultra 9 185H, GCC 13.3.0,
+C++20, and `-O3 -DNDEBUG -pthread`. No CPU affinity, governor control, or
+exclusive-machine isolation was used. Each book workload replayed one million
+pre-generated operations to warm the book, then measured another million. The
+latency sample buffer and `steady_clock` were touched before each measured loop.
+
+| Workload | Throughput across 5 runs | Sampled p99 across 5 runs | C++ heap allocations | Hot-loop minor faults |
+|---|---:|---:|---:|---:|
+| Add/match, one price | 14.41-16.28 million ops/s | 0.495-0.715 microseconds | 0 in each run | 0 in each run |
+| Add/cancel, one price | 14.39-17.58 million ops/s | 0.456-0.670 microseconds | 0 in each run | 0 in each run |
+| Add/cancel, 1,024 prices | 6.82-8.91 million ops/s | 1.013-1.403 microseconds | 0 in each run | 0 in each run |
+| ITCH add decoding | 35.70-41.40 million messages/s | not measured | 0 in each run | not measured |
+
+Minor faults are the before/after difference in `getrusage(RUSAGE_THREAD)` for
+the warmed matching loop. Thus **zero was observed in these 15 measured book
+loops**. It is not a claim about startup, whole-process faults, all inputs, or
+all environments. Each p99 is computed from one in every 256 synchronous book
+operations, including timer overhead. The figures are not pipeline or network
+latencies. The initial probe without a pre-touched sample buffer observed eight
+minor faults in the first matching loop; touching that buffer removed most of
+them, and priming the timer removed the remaining first-use faults. This matters
+because instrumentation can otherwise be misattributed to the engine.
+
+The local WSL2 `perf stat` reports `<not supported>` for `cycles`,
+`instructions`, `L1-dcache-loads`, `L1-dcache-load-misses`, `LLC-loads`, and
+`LLC-load-misses`; the software `minor-faults` counter works. Accordingly, the
+claimed 60% cache-miss reduction and 99.8% L1 data-cache hit rate **cannot be
+verified on this host**. A 60% reduction would also require a defined baseline
+and matched hardware, input, and measurement interval. Throughput and allocation
+counts cannot substitute for cache-event counts.
+
 ## Windows toolchain issue
 
 Local native `thread_local` access failed with an access violation under ASLR,
@@ -70,9 +104,10 @@ repeatable stress/allocation instrumentation.
 
 The MPMC algorithm's reservation protocol is not a formal lock-free progress
 guarantee. ITCH support is the documented order-depth subset, not the entire feed.
-No claim is made that cache layout changes have reduced misses by 60%, that L1
-hit rate is 99.8%, or that hot-path minor faults are zero on Linux: those require
-actual hardware-counter measurements. The local sampled synchronous p99 values
-are below 2.2 microseconds and throughput exceeds 450K operations/s on these
-workloads, but do not establish a universal execution-latency bound or an
-end-to-end latency target. Report results with these measurement boundaries.
+No claim is made that cache layout changes have reduced misses by 60% or that
+L1 hit rate is 99.8%: those require hardware-counter measurements that are
+unavailable in local WSL2. The five WSL2 runs observed zero minor page faults
+in each warmed book loop. Sampled synchronous p99 values were below 2.2
+microseconds and throughput exceeded 450K operations/s on these workloads,
+but neither establishes a universal execution-latency bound or an end-to-end
+latency target. Report results with these measurement boundaries.

@@ -74,7 +74,11 @@ int main(int argc,char **argv) {
       }
       for(const auto &o:events) book.process(o);
       book.clear();
-      std::vector<double> latency; latency.reserve(count/256+1);
+      // Touch every sample page before counting faults in the measured loop.
+      std::vector<double> latency((count + 255) / 256, 0.0);
+      std::size_t sample_index = 0;
+      // Prime the timer and its runtime state before the fault-count interval.
+      (void)Clock::now();
       allocations=0; count_allocations=true;
 #ifdef __linux__
       rusage before_usage{}, after_usage{};
@@ -84,7 +88,7 @@ int main(int argc,char **argv) {
       for(std::size_t i=0;i<count;++i) {
         if(i%256==0) {
           auto before=Clock::now(); book.process(events[i]);
-          latency.push_back(std::chrono::duration<double,std::nano>(Clock::now()-before).count());
+          latency[sample_index++] = std::chrono::duration<double,std::nano>(Clock::now()-before).count();
         } else book.process(events[i]);
       }
       const auto seconds=std::chrono::duration<double>(Clock::now()-start).count();

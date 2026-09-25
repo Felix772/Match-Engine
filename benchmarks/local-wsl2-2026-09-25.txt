@@ -1,0 +1,70 @@
+# Local WSL2 measurement, 2026-09-25
+# Intel Core Ultra 9 185H; GCC 13.3.0; Linux 6.18.33.2-microsoft-standard-WSL2
+# Build: g++ -O3 -DNDEBUG -std=c++20 -pthread -Wall -Wextra -Wpedantic -o build/stress-benchmark-linux stress_benchmark.cpp orderbook.cpp pipeline.cpp itch.cpp
+# Repetition: ./build/stress-benchmark-linux (five separate processes)
+# No CPU pinning, governor control, or exclusive-machine isolation.
+# Each measured book loop has 1,000,000 operations after 1,000,000 warmup operations.
+# Timer and latency sample buffer primed before getrusage fault interval.
+run=1
+compiler=13.3.0, avx2=1
+workload=matching, operations=1000000, ops_per_second=15551049, sampled_p50_ns=123, sampled_p95_ns=300, sampled_p99_ns=715, cpp_heap_allocations=0
+hot_loop_minor_faults=0
+workload=cancel_fifo, operations=1000000, ops_per_second=17260684, sampled_p50_ns=137, sampled_p95_ns=235, sampled_p99_ns=511, cpp_heap_allocations=0
+hot_loop_minor_faults=0
+workload=cancel_1024_prices, operations=1000000, ops_per_second=8434545, sampled_p50_ns=208, sampled_p95_ns=435, sampled_p99_ns=1152, cpp_heap_allocations=0
+hot_loop_minor_faults=0
+workload=itch_parse, ops_per_second=38468304, checksum=227493856, cpp_heap_allocations=0
+run=2
+compiler=13.3.0, avx2=1
+workload=matching, operations=1000000, ops_per_second=15282354, sampled_p50_ns=133, sampled_p95_ns=306, sampled_p99_ns=712, cpp_heap_allocations=0
+hot_loop_minor_faults=0
+workload=cancel_fifo, operations=1000000, ops_per_second=16592811, sampled_p50_ns=136, sampled_p95_ns=263, sampled_p99_ns=481, cpp_heap_allocations=0
+hot_loop_minor_faults=0
+workload=cancel_1024_prices, operations=1000000, ops_per_second=8907607, sampled_p50_ns=205, sampled_p95_ns=442, sampled_p99_ns=1202, cpp_heap_allocations=0
+hot_loop_minor_faults=0
+workload=itch_parse, ops_per_second=41398818, checksum=227493856, cpp_heap_allocations=0
+run=3
+compiler=13.3.0, avx2=1
+workload=matching, operations=1000000, ops_per_second=14410786, sampled_p50_ns=121, sampled_p95_ns=312, sampled_p99_ns=620, cpp_heap_allocations=0
+hot_loop_minor_faults=0
+workload=cancel_fifo, operations=1000000, ops_per_second=14388874, sampled_p50_ns=137, sampled_p95_ns=291, sampled_p99_ns=670, cpp_heap_allocations=0
+hot_loop_minor_faults=0
+workload=cancel_1024_prices, operations=1000000, ops_per_second=6815189, sampled_p50_ns=215, sampled_p95_ns=554, sampled_p99_ns=1403, cpp_heap_allocations=0
+hot_loop_minor_faults=0
+workload=itch_parse, ops_per_second=35698826, checksum=227493856, cpp_heap_allocations=0
+run=4
+compiler=13.3.0, avx2=1
+workload=matching, operations=1000000, ops_per_second=16154870, sampled_p50_ns=122, sampled_p95_ns=300, sampled_p99_ns=519, cpp_heap_allocations=0
+hot_loop_minor_faults=0
+workload=cancel_fifo, operations=1000000, ops_per_second=16747784, sampled_p50_ns=143, sampled_p95_ns=229, sampled_p99_ns=476, cpp_heap_allocations=0
+hot_loop_minor_faults=0
+workload=cancel_1024_prices, operations=1000000, ops_per_second=8713140, sampled_p50_ns=205, sampled_p95_ns=427, sampled_p99_ns=1132, cpp_heap_allocations=0
+hot_loop_minor_faults=0
+workload=itch_parse, ops_per_second=39245826, checksum=227493856, cpp_heap_allocations=0
+run=5
+compiler=13.3.0, avx2=1
+workload=matching, operations=1000000, ops_per_second=16282252, sampled_p50_ns=130, sampled_p95_ns=297, sampled_p99_ns=495, cpp_heap_allocations=0
+hot_loop_minor_faults=0
+workload=cancel_fifo, operations=1000000, ops_per_second=17578505, sampled_p50_ns=136, sampled_p95_ns=232, sampled_p99_ns=456, cpp_heap_allocations=0
+hot_loop_minor_faults=0
+workload=cancel_1024_prices, operations=1000000, ops_per_second=8763661, sampled_p50_ns=202, sampled_p95_ns=421, sampled_p99_ns=1013, cpp_heap_allocations=0
+hot_loop_minor_faults=0
+workload=itch_parse, ops_per_second=38900740, checksum=227493856, cpp_heap_allocations=0
+# perf stat -e cycles,instructions,L1-dcache-loads,L1-dcache-load-misses,LLC-loads,LLC-load-misses,minor-faults -- true
+
+ Performance counter stats for 'true':
+
+   <not supported>      cycles:u                                                              
+   <not supported>      instructions:u                                                        
+   <not supported>      L1-dcache-loads:u                                                     
+   <not supported>      L1-dcache-load-misses:u                                               
+   <not supported>      LLC-loads:u                                                           
+   <not supported>      LLC-load-misses:u                                                     
+                48      minor-faults:u                                                        
+
+       0.001249521 seconds time elapsed
+
+       0.000172000 seconds user
+       0.000000000 seconds sys
+
+
